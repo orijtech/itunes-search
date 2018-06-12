@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package rpc;
+
+option java_package = "io.mediasearch.search";
+
+message Request {
+    string id       = 1;
+    string country  = 2;
+    string entity   = 3;
+    string language = 4;
+    string query    = 5;
+    bool explicit   = 6;
+}
+
+message Result {
+    string id               = 1;
+    string artist_url       = 2;
+    string preview_url      = 3;
+    string artwork_url      = 4;
+    bool streamable         = 5;
+    string currency         = 6;
+    string collection_name  = 7;
+    double collection_price = 8;
+    string kind             = 9;
+    string genre            = 10;
+    string country          = 11;
+    double track_price      = 12; 
+    string artist_name      = 13;
+    uint64 track_id         = 14;
+    int32 track_number      = 15;
+    float track_time_millis = 16;
+    string track_name       = 17;
+    string track_censored_name = 18;
+    string track_view_url      = 19;
+}
+
+message Response {
+    string request_id       = 1;
+    uint64 result_count     = 2;
+    repeated Result results = 3;
+    string err              = 4;
+}
+
+service Search {
+    rpc iTunesSearchNonStreaming(Request) returns (Response) {};
+    rpc iTunesSearchStreaming(stream Request) returns (stream Response) {};
+}
