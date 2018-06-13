@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	xray "github.com/census-instrumentation/opencensus-go-exporter-aws"
 	"go.opencensus.io/exporter/stackdriver"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
@@ -33,8 +34,6 @@ func main() {
 }
 
 func createAndRegisterExporters() {
-	trace.ApplyConfig(trace.Config{DefaultSampler: trace.ProbabilitySampler(0.9)})
-
 	if err := view.Register(ocgrpc.DefaultClientViews...); err != nil {
 		log.Fatalf("Failed to register ocgrpc defaultClient views: %v", err)
 	}
@@ -58,4 +57,11 @@ func createAndRegisterExporters() {
 	}
 	view.RegisterExporter(se)
 	trace.RegisterExporter(se)
+
+	// AWS X-Ray
+	xe, err := xray.NewExporter(xray.WithVersion("latest"))
+	if err != nil {
+		log.Fatalf("Failed to create the X-Ray exporter: %v", err)
+	}
+	trace.RegisterExporter(xe)
 }

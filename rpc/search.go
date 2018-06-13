@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"log"
 
 	"go.opencensus.io/trace"
 
@@ -24,6 +25,7 @@ func (s *SearchBackend) ITunesSearchNonStreaming(ctx context.Context, req *Reque
 func (s *SearchBackend) ITunesSearchStreaming(srv Search_ITunesSearchStreamingServer) error {
 	// Persistent and streaming server
 
+	log.Printf("iTunesSearchStreaming: %v\n", srv)
 	queries := make(chan *query, 100)
 	// Receive routine asynchronously running to ensure that we
 	// can accumulate very many requests without having to wait for a response

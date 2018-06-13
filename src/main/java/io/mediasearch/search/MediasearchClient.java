@@ -1,19 +1,13 @@
 package io.mediasearch.search;
 
+import com.google.protobuf.CodedOutputStream;
+
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Observability;
 
 import io.mediasearch.search.Defs.Request;
 import io.mediasearch.search.Defs.Response;
 import io.mediasearch.search.SearchGrpc;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.util.concurrent.TimeUnit;
 
 import io.opencensus.common.Duration;
 import io.opencensus.contrib.grpc.metrics.RpcViews;
@@ -28,12 +22,23 @@ import io.opencensus.trace.config.TraceConfig;
 import io.opencensus.trace.config.TraceParams;
 import io.opencensus.trace.samplers.Samplers;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.concurrent.TimeUnit;
+
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Observability;
+import redis.clients.jedis.params.SetParams;
+
 public class MediasearchClient {
     private final ManagedChannel channel;
     private final SearchGrpc.SearchBlockingStub stub;
 
     private static final Tracer tracer = Tracing.getTracer();
     private static final Jedis jedis = new Jedis("localhost");
+    private static final SetParams _3hoursExpiryInSeconds = SetParams.setParams().ex(3 * 60 * 60);
 
     public MediasearchClient(String host, int port) {
         try {
@@ -54,8 +59,8 @@ public class MediasearchClient {
         this.channel.shutdown().awaitTermination(4, TimeUnit.SECONDS);
     }
 
-    public String search(Request req) {
-        Span span = MediasearchClient.tracer.spanBuilder("(*MediasearchClient).search")
+    public Response search(Request req) {
+        Span span = this.tracer.spanBuilder("searching")
             .setRecordEvents(true)
             .startSpan();
 
@@ -63,20 +68,52 @@ public class MediasearchClient {
             String query = req.getQuery();
             String found = jedis.get(query);
             if (found != null && found != "") {
+                // Then parse the message from the memoized bytes
                 span.addAnnotation("Cache hit");
-                return found;
+                try {
+                    Response resp = deserialize(found);
+                    if (resp != null)
+                        return resp;
+                } catch(Exception e) {
+                    // If we failed to deserialize, just fallthrough and
+                    // continue to instead fetch -- treat it like a cache miss.
+                    System.err.println("While deserializing got error: " + e.toString());
+                }
             }
 
             // Otherwise this is a cache miss, now query then insert the result
             span.addAnnotation("Cache miss");
             Response resp = this.stub.iTunesSearchNonStreaming(req);
-            String dataOut = resp.toString();
-            jedis.set(query, dataOut);
-            return dataOut;
+
+            // And now to retrieve the serialized blob
+            try {
+                String serialized = this.serialize(resp);
+                // To ensure that items don't go stale forever and
+                // to prune out wasteful storage, let's store them for 3 hours
+                jedis.set(query, serialized, _3hoursExpiryInSeconds);
+            } catch (IOException e) {
+                // It's not a problem if we've failed to cache the response or if
+                // the Redis connection fails -- memoizations is just a nice to have.
+                // Just ensure that we give back to the user the response.
+                System.err.println("Encountered an exception while serializing " + e.toString());
+            }
+
+            return resp;
         } finally {
-            System.out.println("span.end() " + span.toString());
             span.end();
         }
+    }
+
+    public String serialize(Response resp) throws IOException {
+        ByteArrayOutputStream bs = new ByteArrayOutputStream();
+        CodedOutputStream cos = CodedOutputStream.newInstance(bs, resp.getSerializedSize());
+        resp.writeTo(cos);
+        cos.flush();
+        return bs.toString("UTF8");
+    }
+
+    public Response deserialize(String data) throws IOException {
+        return Response.parseFrom(data.getBytes("UTF8"));
     }
 
     public static void main(String []args) {
@@ -99,10 +136,12 @@ public class MediasearchClient {
                 Span span = MediasearchClient.tracer.spanBuilder("search")
                     .setRecordEvents(true)
                     .startSpan();
+
                 Request req = Request.newBuilder().setQuery(query).build();
-                String response = client.search(req);
+                Response response = client.search(req);
                 span.end();
-                System.out.println("< " + response);
+                if (response != null)
+                    System.out.println("< " + response.toString());
             }
         } catch (Exception e) {
             System.err.println("Exception encountered: " + e);
