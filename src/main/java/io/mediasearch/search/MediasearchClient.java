@@ -27,6 +27,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.concurrent.TimeUnit;
+import java.nio.charset.StandardCharsets;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Observability;
@@ -39,6 +40,7 @@ public class MediasearchClient {
     private static final Tracer tracer = Tracing.getTracer();
     private static final Jedis jedis = new Jedis("localhost");
     private static final SetParams _3hoursExpiryInSeconds = SetParams.setParams().ex(3 * 60 * 60);
+    private static final String utf8 = StandardCharsets.UTF_8.toString();
 
     public MediasearchClient(String host, int port) {
         try {
@@ -68,12 +70,13 @@ public class MediasearchClient {
             String query = req.getQuery();
             String found = jedis.get(query);
             if (found != null && found != "") {
-                // Then parse the message from the memoized bytes
-                span.addAnnotation("Cache hit");
+                // Then parse the message from the memoized result
                 try {
                     Response resp = deserialize(found);
-                    if (resp != null)
+                    if (resp != null) {
+                        span.addAnnotation("Cache hit");
                         return resp;
+                    }
                 } catch(Exception e) {
                     // If we failed to deserialize, just fallthrough and
                     // continue to instead fetch -- treat it like a cache miss.
@@ -86,11 +89,10 @@ public class MediasearchClient {
             Response resp = this.stub.iTunesSearchNonStreaming(req);
 
             // And now to retrieve the serialized blob
+            String serialized = null;
+
             try {
-                String serialized = this.serialize(resp);
-                // To ensure that items don't go stale forever and
-                // to prune out wasteful storage, let's store them for 3 hours
-                jedis.set(query, serialized, _3hoursExpiryInSeconds);
+                serialized = this.serialize(resp);
             } catch (IOException e) {
                 // It's not a problem if we've failed to cache the response or if
                 // the Redis connection fails -- memoizations is just a nice to have.
@@ -98,6 +100,11 @@ public class MediasearchClient {
                 System.err.println("Encountered an exception while serializing " + e.toString());
             }
 
+            if (serialized != null && serialized.length() != 0) {
+                // To ensure that items don't go stale forever and
+                // to prune out wasteful storage, let's store them for 3 hours
+                jedis.set(query, serialized, _3hoursExpiryInSeconds);
+            }
             return resp;
         } finally {
             span.end();
@@ -109,11 +116,12 @@ public class MediasearchClient {
         CodedOutputStream cos = CodedOutputStream.newInstance(bs, resp.getSerializedSize());
         resp.writeTo(cos);
         cos.flush();
-        return bs.toString("UTF8");
+        // System.out.println("\033[33mBytesWritten " + cos.getTotalBytesWritten() + "\033[00m\nsupposedBytesWritten: \033[00m");
+        return bs.toString(utf8);
     }
 
     public Response deserialize(String data) throws IOException {
-        return Response.parseFrom(data.getBytes("UTF8"));
+        return Response.parseFrom(data.getBytes(utf8));
     }
 
     public static void main(String []args) {

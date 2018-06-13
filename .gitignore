@@ -1,3 +1,4 @@
 *.rdb
 *.sw[op]
 target/
+bin/
