@@ -10,6 +10,7 @@ import io.mediasearch.search.Defs.Response;
 import io.mediasearch.search.SearchGrpc;
 
 import io.opencensus.common.Duration;
+import io.opencensus.common.Scope;
 import io.opencensus.contrib.grpc.metrics.RpcViews;
 import io.opencensus.exporter.stats.stackdriver.StackdriverStatsConfiguration;
 import io.opencensus.exporter.stats.stackdriver.StackdriverStatsExporter;
@@ -66,7 +67,7 @@ public class MediasearchClient {
             .setRecordEvents(true)
             .startSpan();
 
-        try {
+        try (Scope scopeSpan = tracer.withSpan(span)) {
             String query = req.getQuery();
             String found = jedis.get(query);
             if (found != null && found != "") {
@@ -145,8 +146,10 @@ public class MediasearchClient {
                     .setRecordEvents(true)
                     .startSpan();
 
-                Request req = Request.newBuilder().setQuery(query).build();
-                Response response = client.search(req);
+                try (Scope scopeSpan = tracer.withSpan(span)) {
+                    Request req = Request.newBuilder().setQuery(query).build();
+                    Response response = client.search(req);
+                }
                 span.end();
                 if (response != null)
                     System.out.println("< " + response.toString());
