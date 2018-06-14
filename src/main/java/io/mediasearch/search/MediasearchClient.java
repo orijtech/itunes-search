@@ -1,3 +1,17 @@
+// Copyright 2018, OpenCensus Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package io.mediasearch.search;
 
 import com.google.protobuf.CodedOutputStream;
@@ -12,6 +26,7 @@ import io.mediasearch.search.SearchGrpc;
 import io.opencensus.common.Duration;
 import io.opencensus.common.Scope;
 import io.opencensus.contrib.grpc.metrics.RpcViews;
+import io.opencensus.exporter.stats.prometheus.PrometheusStatsCollector;
 import io.opencensus.exporter.stats.stackdriver.StackdriverStatsConfiguration;
 import io.opencensus.exporter.stats.stackdriver.StackdriverStatsExporter;
 import io.opencensus.exporter.trace.stackdriver.StackdriverTraceConfiguration;
@@ -22,6 +37,8 @@ import io.opencensus.trace.Tracing;
 import io.opencensus.trace.config.TraceConfig;
 import io.opencensus.trace.config.TraceParams;
 import io.opencensus.trace.samplers.Samplers;
+
+import io.prometheus.client.exporter.HTTPServer;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -185,6 +202,11 @@ public class MediasearchClient {
                 StackdriverTraceConfiguration.builder()
                 .setProjectId(gcpProjectId)
                 .build());
+
+        // And then the Prometheus exporter too
+        PrometheusStatsCollector.createAndRegister();
+        // Start the Prometheus server
+        HTTPServer prometheusServer = new HTTPServer(9888, true);
     }
 
     private static String envOrAlternative(String key, String ...alternatives) {
@@ -198,7 +220,6 @@ public class MediasearchClient {
                 }
             }
         }
-        System.out.println("value " + value);
 
         return value;
     }
