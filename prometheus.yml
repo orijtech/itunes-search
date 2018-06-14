@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 10s
+
+  external_labels:
+    monitor: 'itunessearch' 
+
+scrape_configs:
+  - job_name: 'itunesearch'
+
+    scrape_interval: 10s
+
+    static_configs:
+      - targets: ['localhost:9887', 'localhost:9888', 'localhost:9889']

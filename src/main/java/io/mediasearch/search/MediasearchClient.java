@@ -27,8 +27,9 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.util.concurrent.TimeUnit;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Observability;
@@ -39,20 +40,25 @@ public class MediasearchClient {
     private final SearchGrpc.SearchBlockingStub stub;
 
     private static final Tracer tracer = Tracing.getTracer();
-    private static final Jedis jedis = new Jedis("localhost");
+    private static final String redisHost = envOrAlternative("ITUNESSEARCH_REDIS_SERVER_HOST", "localhost");
+    private static final Jedis jedis = new Jedis(redisHost);
+
     private static final SetParams _3hoursExpiryInSeconds = SetParams.setParams().ex(3 * 60 * 60);
     private static final String utf8 = StandardCharsets.UTF_8.toString();
 
-    public MediasearchClient(String host, int port) {
+    public MediasearchClient(String grpcServerHost, int grpcServerPort) {
+        String redisPassword = envOrAlternative("ITUNESSEARCH_REDIS_PASSWORD", "");
         try {
-            jedis.auth("");
+            if (redisPassword != null && redisPassword != "") {
+                jedis.auth(redisPassword);
+            }
         } catch (Exception e) {
-            // Just in case the server doesn't support auth
-            // TODO: actually check if NoAuth is returned
+            // Perhaps this is a NoAuth Set exception, so that's alright
+            // TODO: Actually check for NoAuth exception or throw
         }
 
         // Create the gRPC channel to the server.
-        this.channel = ManagedChannelBuilder.forAddress(host, port)
+        this.channel = ManagedChannelBuilder.forAddress(grpcServerHost, grpcServerPort)
             .usePlaintext(true)
             .build();
         this.stub = SearchGrpc.newBlockingStub(this.channel);
@@ -63,11 +69,11 @@ public class MediasearchClient {
     }
 
     public Response search(Request req) {
-        Span span = this.tracer.spanBuilder("searching")
+        try (Scope ss = MediasearchClient.tracer.spanBuilder("searching")
             .setRecordEvents(true)
-            .startSpan();
+            .startScopedSpan()) {
 
-        try (Scope scopeSpan = tracer.withSpan(span)) {
+            Span span = MediasearchClient.tracer.getCurrentSpan();
             String query = req.getQuery();
             String found = jedis.get(query);
             if (found != null && found != "") {
@@ -81,7 +87,7 @@ public class MediasearchClient {
                 } catch(Exception e) {
                     // If we failed to deserialize, just fallthrough and
                     // continue to instead fetch -- treat it like a cache miss.
-                    System.err.println("While deserializing got error: " + e.toString());
+                    System.err.println("While deserializing got error: " + e);
                 }
             }
 
@@ -101,14 +107,12 @@ public class MediasearchClient {
                 System.err.println("Encountered an exception while serializing " + e.toString());
             }
 
-            if (serialized != null && serialized.length() != 0) {
+            if (serialized != null && serialized != "") {
                 // To ensure that items don't go stale forever and
                 // to prune out wasteful storage, let's store them for 3 hours
                 jedis.set(query, serialized, _3hoursExpiryInSeconds);
             }
             return resp;
-        } finally {
-            span.end();
         }
     }
 
@@ -142,17 +146,13 @@ public class MediasearchClient {
                 System.out.flush();
                 String query = stdin.readLine();
 
-                Span span = MediasearchClient.tracer.spanBuilder("search")
+                try (Scope ss = MediasearchClient.tracer.spanBuilder("search")
                     .setRecordEvents(true)
-                    .startSpan();
-
-                try (Scope scopeSpan = tracer.withSpan(span)) {
+                    .startScopedSpan()) {
                     Request req = Request.newBuilder().setQuery(query).build();
                     Response response = client.search(req);
+                    System.out.println("< " + response);
                 }
-                span.end();
-                if (response != null)
-                    System.out.println("< " + response.toString());
             }
         } catch (Exception e) {
             System.err.println("Exception encountered: " + e);
@@ -171,9 +171,7 @@ public class MediasearchClient {
         // Register all the gRPC views and enable stats
         RpcViews.registerAllViews();
 
-        String gcpProjectId = System.getenv().get("MEDIASEARCH_CLIENT_PROJECTID");
-        if (gcpProjectId == null || gcpProjectId == "")
-            gcpProjectId = "census-demos";
+        String gcpProjectId = envOrAlternative("ITUNESSEARCH_CLIENT_PROJECTID", "census-demos");
 
         // Create the Stackdriver stats exporter
         StackdriverStatsExporter.createAndRegister(
@@ -187,5 +185,21 @@ public class MediasearchClient {
                 StackdriverTraceConfiguration.builder()
                 .setProjectId(gcpProjectId)
                 .build());
+    }
+
+    private static String envOrAlternative(String key, String ...alternatives) {
+        String value = System.getenv().get(key);
+
+        if (value == null || value == "") { // In this case, the environment variable is not set
+            for (String alternative: alternatives) {
+                if (alternative != null && alternative != "") {
+                    value = alternative;
+                    break;
+                }
+            }
+        }
+        System.out.println("value " + value);
+
+        return value;
     }
 }

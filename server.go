@@ -3,10 +3,12 @@ package main
 import (
 	"log"
 	"net"
+	"net/http"
 
 	"google.golang.org/grpc"
 
 	xray "github.com/census-instrumentation/opencensus-go-exporter-aws"
+	"go.opencensus.io/exporter/prometheus"
 	"go.opencensus.io/exporter/stackdriver"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
@@ -14,6 +16,7 @@ import (
 	"go.opencensus.io/trace"
 
 	"github.com/orijtech/itunes-search/rpc"
+	"github.com/orijtech/otils"
 )
 
 func main() {
@@ -47,7 +50,7 @@ func createAndRegisterExporters() {
 		log.Fatalf("Failed to register ochttp defaultServer views: %v", err)
 	}
 
-	prefix := "media-search"
+	prefix := "itunessearch_server"
 	se, err := stackdriver.NewExporter(stackdriver.Options{
 		MetricPrefix: prefix,
 		ProjectID:    "census-demos",
@@ -64,4 +67,17 @@ func createAndRegisterExporters() {
 		log.Fatalf("Failed to create the X-Ray exporter: %v", err)
 	}
 	trace.RegisterExporter(xe)
+
+	// Prometheus
+	pe, err := prometheus.NewExporter(prometheus.Options{Namespace: prefix})
+	if err != nil {
+		log.Fatalf("Failed to create Prometheus exporter: %v", err)
+	}
+	view.RegisterExporter(pe)
+	prometheusBindAddr := otils.EnvOrAlternates("ITUNESSEARCH_GO_SERVER_PROMETHEUS_BIND_ADDR", ":9889")
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", pe)
+		log.Fatal(http.ListenAndServe(prometheusBindAddr, mux))
+	}()
 }
