@@ -17,7 +17,7 @@ which you enabled Stackdriver Tracing and Monitoring.
 ## Environment variables
 
 Key|Type|Default|Notes
----|---|---
+---|---|---|---
 ITUNESSEARCH_CLIENT_PROJECTID|String|"census-demos"|The Google Cloud Platform projectID for the project that has Stackdriver Tracing and Monitoring enabled
 ITUNESSEARCH_REDIS_SERVER_HOST|String|"localhost"|The address of the Redis server
 ITUNESSEARCH_GO_CLIENT_PROMETHEUS_BIND_ADDR|String:9887|The address of the Go client that prometheus will scrape. Also modify the Prometheus.yml file if you change the default
