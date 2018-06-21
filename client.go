@@ -20,7 +20,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -28,14 +27,6 @@ import (
 
 	proto "github.com/golang/protobuf/proto"
 	"google.golang.org/grpc"
-
-	xray "github.com/census-instrumentation/opencensus-go-exporter-aws"
-	"go.opencensus.io/exporter/prometheus"
-	"go.opencensus.io/exporter/stackdriver"
-	"go.opencensus.io/plugin/ocgrpc"
-	"go.opencensus.io/plugin/ochttp"
-	"go.opencensus.io/stats/view"
-	"go.opencensus.io/trace"
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/olekukonko/tablewriter"
@@ -66,9 +57,7 @@ func main() {
 	entity := flag.String("entity", "music", `the entity categorization of media e.g "all" or "tvShow" or "movie" or "music" or "musicVideo"`)
 	flag.Parse()
 
-	createAndRegisterExporters()
-
-	cc, err := grpc.Dial(*serverAddr, grpc.WithInsecure(), grpc.WithStatsHandler(new(ocgrpc.ClientHandler)))
+	cc, err := grpc.Dial(*serverAddr, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Failed to dial to the gRPC server: %v", err)
 	}
@@ -119,107 +108,38 @@ func printResults(res *rpc.Response) {
 	table.Render()
 }
 
-func createAndRegisterExporters() {
-	trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
-
-	// Register the gRPC related views
-	if err := view.Register(ocgrpc.DefaultClientViews...); err != nil {
-		log.Fatalf("Failed to register ocgrpc defaultClient views: %v", err)
-	}
-	if err := view.Register(ocgrpc.DefaultServerViews...); err != nil {
-		log.Fatalf("Failed to register ocgrpc defaultServer views: %v", err)
-	}
-
-	// Register the HTTP related views
-	if err := view.Register(ochttp.DefaultClientViews...); err != nil {
-		log.Fatalf("Failed to register ochttp defaultClient views: %v", err)
-	}
-	if err := view.Register(ochttp.DefaultServerViews...); err != nil {
-		log.Fatalf("Failed to register ochttp defaultServer views: %v", err)
-	}
-
-	// Register the Redis views
-	if err := view.Register(redis.ObservabilityMetricViews...); err != nil {
-		log.Fatalf("Failed to register redis views: %v", err)
-	}
-
-	xe, err := xray.NewExporter(xray.WithVersion("latest"))
-	if err != nil {
-		log.Fatalf("Failed to create the X-Ray exporter: %v", err)
-	}
-	trace.RegisterExporter(xe)
-
-	prefix := "itunessearch_go_client"
-	se, err := stackdriver.NewExporter(stackdriver.Options{
-		MetricPrefix: prefix,
-		ProjectID:    otils.EnvOrAlternates("ITUNESSEARCH_CLIENT_PROJECTID", "census-demos"),
-	})
-	if err != nil {
-		log.Fatalf("Failed to create the Stackdriver exporter: %v", err)
-	}
-	view.RegisterExporter(se)
-	trace.RegisterExporter(se)
-
-	// Prometheus
-	pe, err := prometheus.NewExporter(prometheus.Options{Namespace: prefix})
-	if err != nil {
-		log.Fatalf("Failed to create Prometheus exporter: %v", err)
-	}
-	view.RegisterExporter(pe)
-	prometheusBindAddr := otils.EnvOrAlternates("ITUNESSEARCH_GO_CLIENT_PROMETHEUS_BIND_ADDR", ":9887")
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", pe)
-		log.Fatal(http.ListenAndServe(prometheusBindAddr, mux))
-	}()
-}
-
 var blankResponse = new(rpc.Response)
 
 func performSearch(ctx context.Context, searchClient rpc.SearchClient, req *rpc.Request) (*rpc.Response, error) {
-	ctx, span := trace.StartSpan(ctx, "searching")
-	defer span.End()
-
 	redisConn := redisPool.GetWithContext(ctx)
 	defer redisConn.Close()
 
 	// Check the cache
 	cached, err := redis.Bytes(redisConn.Do("GET", req.Query))
 	if err == nil && len(cached) > 0 {
-		_, umSpan := trace.StartSpan(ctx, "proto.Unmarshal")
-		defer umSpan.End()
-
 		res := new(rpc.Response)
 		if err := proto.Unmarshal(cached, res); err == nil && !reflect.DeepEqual(res, blankResponse) {
 			return res, nil
 		} else if err != nil {
-			// Still mark the span and errored
-			umSpan.SetStatus(trace.Status{Code: trace.StatusCodeInternal, Message: err.Error()})
+			// Log the error but then treat it as a cache miss
+			log.Printf("Unmarshaling error: %v", err)
 		}
 	}
 
 	// Cache miss so now performing actual search
 	res, err := searchClient.ITunesSearchNonStreaming(ctx, req)
 	if err != nil {
-		span.SetStatus(trace.Status{Code: trace.StatusCodeInternal, Message: err.Error()})
 		return nil, err
 	}
 
-	// Now save this item for later cache hits
-	_, mSpan := trace.StartSpan(ctx, "proto.Marshal")
-	defer mSpan.End()
-
 	blob, err := proto.Marshal(res)
 	if err != nil {
-		mSpan.SetStatus(trace.Status{Code: trace.StatusCodeInternal, Message: err.Error()})
-		mSpan.End()
 		// Not an error that should not show the user their results
 		return res, nil
 	}
-	mSpan.End()
 
 	if _, err := redisConn.Do("SETEX", req.Query, _3HoursInSeconds, blob); err != nil {
-		span.SetStatus(trace.Status{Code: trace.StatusCodeInternal, Message: err.Error()})
+		log.Printf("Caching error: %v", err)
 	}
 	return res, nil
 }

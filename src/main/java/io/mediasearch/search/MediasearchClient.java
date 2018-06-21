@@ -23,24 +23,6 @@ import io.mediasearch.search.Defs.Request;
 import io.mediasearch.search.Defs.Response;
 import io.mediasearch.search.SearchGrpc;
 
-import io.opencensus.common.Duration;
-import io.opencensus.common.Scope;
-import io.opencensus.contrib.grpc.metrics.RpcViews;
-import io.opencensus.exporter.stats.prometheus.PrometheusStatsCollector;
-import io.opencensus.exporter.stats.stackdriver.StackdriverStatsConfiguration;
-import io.opencensus.exporter.stats.stackdriver.StackdriverStatsExporter;
-import io.opencensus.exporter.trace.stackdriver.StackdriverTraceConfiguration;
-import io.opencensus.exporter.trace.stackdriver.StackdriverTraceExporter;
-import io.opencensus.trace.Span;
-import io.opencensus.trace.Status;
-import io.opencensus.trace.Tracer;
-import io.opencensus.trace.Tracing;
-import io.opencensus.trace.config.TraceConfig;
-import io.opencensus.trace.config.TraceParams;
-import io.opencensus.trace.samplers.Samplers;
-
-import io.prometheus.client.exporter.HTTPServer;
-
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -50,14 +32,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Observability;
 import redis.clients.jedis.params.SetParams;
 
 public class MediasearchClient {
     private final ManagedChannel channel;
     private final SearchGrpc.SearchBlockingStub stub;
 
-    private static final Tracer tracer = Tracing.getTracer();
     private static final String redisHost = envOrAlternative("ITUNESSEARCH_REDIS_SERVER_HOST", "localhost");
     private static final Jedis jedis = new Jedis(redisHost);
 
@@ -87,31 +67,22 @@ public class MediasearchClient {
     }
 
     public Response search(Request req) {
-        try (Scope ss = MediasearchClient.tracer.spanBuilder("searching")
-            .setRecordEvents(true)
-            .startScopedSpan()) {
-
-            Span span = MediasearchClient.tracer.getCurrentSpan();
             String query = req.getQuery();
             String found = jedis.get(query);
             if (found != null && found != "") {
                 // Then parse the message from the memoized result
                 try {
                     Response resp = deserialize(found);
-                    if (resp != null) {
-                        span.addAnnotation("Cache hit");
+                    if (resp != null)
                         return resp;
-                    }
                 } catch(Exception e) {
                     // If we failed to deserialize, just fallthrough and
                     // continue to instead fetch -- treat it like a cache miss.
                     System.err.println("While deserializing got error: " + e);
-                    span.setStatus(Status.INTERNAL.withDescription(e.toString()));
                 }
             }
 
             // Otherwise this is a cache miss, now query then insert the result
-            span.addAnnotation("Cache miss");
             Response resp = this.stub.iTunesSearchNonStreaming(req);
 
             // And now to retrieve the serialized blob
@@ -124,7 +95,6 @@ public class MediasearchClient {
                 // the Redis connection fails -- memoizations is just a nice to have.
                 // Just ensure that we give back to the user the response.
                 System.err.println("Encountered an exception while serializing " + e.toString());
-                span.setStatus(Status.INTERNAL.withDescription(e.toString()));
             }
 
             if (serialized != null && serialized != "") {
@@ -133,7 +103,6 @@ public class MediasearchClient {
                 jedis.set(query, serialized, _3hoursExpiryInSeconds);
             }
             return resp;
-        }
     }
 
     public String serialize(Response resp) throws IOException {
@@ -153,63 +122,19 @@ public class MediasearchClient {
         MediasearchClient client = new MediasearchClient("0.0.0.0", 9449);
 
         try {
-            setupOpenCensusAndExporters();
-        } catch (IOException e) {
-            System.err.println("Failed to setup OpenCensus exporters: " + e + "\nso proceeding without them");
-        }
-
-        try {
-            // Setup OpenCensus exporters
             BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
             while (true) {
                 System.out.print("> ");
                 System.out.flush();
                 String query = stdin.readLine();
 
-                try (Scope ss = MediasearchClient.tracer.spanBuilder("search")
-                    .setRecordEvents(true)
-                    .startScopedSpan()) {
-                    Request req = Request.newBuilder().setQuery(query).build();
-                    Response response = client.search(req);
-                    System.out.println("< " + response);
-                }
+                Request req = Request.newBuilder().setQuery(query).build();
+                Response response = client.search(req);
+                System.out.println("< " + response);
             }
         } catch (Exception e) {
             System.err.println("Exception encountered: " + e);
         }
-    }
-
-    private static void setupOpenCensusAndExporters() throws IOException {
-        // Enable exporting of all the Jedis specific metrics and views
-        Observability.registerAllViews();
-
-        // Change the sampling rate to always sample
-        TraceConfig traceConfig = Tracing.getTraceConfig();
-        traceConfig.updateActiveTraceParams(
-                traceConfig.getActiveTraceParams().toBuilder().setSampler(Samplers.alwaysSample()).build());
-
-        // Register all the gRPC views and enable stats
-        RpcViews.registerAllViews();
-
-        String gcpProjectId = envOrAlternative("ITUNESSEARCH_CLIENT_PROJECTID", "census-demos");
-
-        // Create the Stackdriver stats exporter
-        StackdriverStatsExporter.createAndRegister(
-                StackdriverStatsConfiguration.builder()
-                .setProjectId(gcpProjectId)
-                .setExportInterval(Duration.create(12, 0))
-                .build());
-
-        // Next create the Stackdriver trace exporter
-        StackdriverTraceExporter.createAndRegister(
-                StackdriverTraceConfiguration.builder()
-                .setProjectId(gcpProjectId)
-                .build());
-
-        // And then the Prometheus exporter too
-        PrometheusStatsCollector.createAndRegister();
-        // Start the Prometheus server
-        HTTPServer prometheusServer = new HTTPServer(9888, true);
     }
 
     private static String envOrAlternative(String key, String ...alternatives) {
