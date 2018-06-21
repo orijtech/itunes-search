@@ -32,6 +32,7 @@ import io.opencensus.exporter.stats.stackdriver.StackdriverStatsExporter;
 import io.opencensus.exporter.trace.stackdriver.StackdriverTraceConfiguration;
 import io.opencensus.exporter.trace.stackdriver.StackdriverTraceExporter;
 import io.opencensus.trace.Span;
+import io.opencensus.trace.Status;
 import io.opencensus.trace.Tracer;
 import io.opencensus.trace.Tracing;
 import io.opencensus.trace.config.TraceConfig;
@@ -105,6 +106,7 @@ public class MediasearchClient {
                     // If we failed to deserialize, just fallthrough and
                     // continue to instead fetch -- treat it like a cache miss.
                     System.err.println("While deserializing got error: " + e);
+                    span.setStatus(Status.INTERNAL.withDescription(e.toString()));
                 }
             }
 
@@ -122,6 +124,7 @@ public class MediasearchClient {
                 // the Redis connection fails -- memoizations is just a nice to have.
                 // Just ensure that we give back to the user the response.
                 System.err.println("Encountered an exception while serializing " + e.toString());
+                span.setStatus(Status.INTERNAL.withDescription(e.toString()));
             }
 
             if (serialized != null && serialized != "") {
