@@ -21,13 +21,16 @@ import (
 
 	"google.golang.org/grpc"
 
-	xray "github.com/census-instrumentation/opencensus-go-exporter-aws"
 	"go.opencensus.io/exporter/prometheus"
-	"go.opencensus.io/exporter/stackdriver"
+	"go.opencensus.io/exporter/zipkin"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"
+	"go.opencensus.io/zpages"
+
+	openzipkin "github.com/openzipkin/zipkin-go"
+	zipkinHTTP "github.com/openzipkin/zipkin-go/reporter/http"
 
 	"github.com/orijtech/itunes-search/rpc"
 	"github.com/orijtech/otils"
@@ -44,6 +47,13 @@ func main() {
 	srv := grpc.NewServer(grpc.StatsHandler(new(ocgrpc.ServerHandler)))
 	rpc.RegisterSearchServer(srv, new(rpc.SearchBackend))
 	log.Printf("Running gRPC server at: %q", ln.Addr())
+
+	// Run zPages too
+	go func() {
+		mux := http.NewServeMux()
+		zpages.Handle(mux, "/debug")
+		log.Fatal(http.ListenAndServe(":8888", mux))
+	}()
 
 	if err := srv.Serve(ln); err != nil {
 		log.Fatalf("gRPC server error while serving: %v", err)
@@ -65,22 +75,13 @@ func createAndRegisterExporters() {
 	}
 
 	prefix := "itunessearch_server"
-	se, err := stackdriver.NewExporter(stackdriver.Options{
-		MetricPrefix: prefix,
-		ProjectID:    "census-demos",
-	})
+	localEndpoint, err := openzipkin.NewEndpoint(prefix, "localhost")
 	if err != nil {
-		log.Fatalf("Failed to create the Stackdriver exporter: %v", err)
+		log.Fatalf("Failed to create the Zipkin exporter endpoint: %v", err)
 	}
-	view.RegisterExporter(se)
-	trace.RegisterExporter(se)
-
-	// AWS X-Ray
-	xe, err := xray.NewExporter(xray.WithVersion("latest"))
-	if err != nil {
-		log.Fatalf("Failed to create the X-Ray exporter: %v", err)
-	}
-	trace.RegisterExporter(xe)
+	reporter := zipkinHTTP.NewReporter("http://localhost:9411/api/v2/spans")
+	ze := zipkin.NewExporter(reporter, localEndpoint)
+	trace.RegisterExporter(ze)
 
 	// Prometheus
 	pe, err := prometheus.NewExporter(prometheus.Options{Namespace: prefix})

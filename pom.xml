@@ -12,7 +12,6 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <opencensus.version>0.14.0</opencensus.version> <!-- The OpenCensus version to use -->
         <grpc.version>1.10.1</grpc.version> <!-- The gRPC version to use with the version of OpenCensus -->
-        <jedis.jarPath>/Users/emmanuelodeke/Desktop/CloudMemoryStore/redis/java/jedis/target/jedis-3.0.0-SNAPSHOT.jar</jedis.jarPath>
     </properties>
 
     <dependencies>
@@ -48,13 +47,18 @@
 
         <dependency>
             <groupId>io.opencensus</groupId>
-            <artifactId>opencensus-exporter-trace-jaeger</artifactId>
+            <artifactId>opencensus-exporter-stats-prometheus</artifactId>
             <version>${opencensus.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>simpleclient_httpserver</artifactId>
+            <version>0.3.0</version>
         </dependency>
 
         <dependency>
             <groupId>io.opencensus</groupId>
-            <artifactId>opencensus-exporter-stats-stackdriver</artifactId>
+            <artifactId>opencensus-exporter-trace-zipkin</artifactId>
             <version>${opencensus.version}</version>
         </dependency>
 
@@ -85,15 +89,15 @@
         </dependency> 
 
         <dependency>
-            <groupId>io.opencensus</groupId>
-            <artifactId>opencensus-exporter-trace-stackdriver</artifactId>
-            <version>${opencensus.version}</version>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>3.0.0-m1</version>
         </dependency>
 
         <dependency>
-            <groupId>redis.clients</groupId>
-            <artifactId>jedis</artifactId>
-            <version>3.0.0</version>
+            <groupId>io.orijtech.integrations</groupId>
+            <artifactId>ocjedis</artifactId>
+            <version>0.0.1</version>
         </dependency>
 
     </dependencies>

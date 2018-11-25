@@ -27,10 +27,8 @@ import io.opencensus.common.Duration;
 import io.opencensus.common.Scope;
 import io.opencensus.contrib.grpc.metrics.RpcViews;
 import io.opencensus.exporter.stats.prometheus.PrometheusStatsCollector;
-import io.opencensus.exporter.stats.stackdriver.StackdriverStatsConfiguration;
-import io.opencensus.exporter.stats.stackdriver.StackdriverStatsExporter;
-import io.opencensus.exporter.trace.stackdriver.StackdriverTraceConfiguration;
-import io.opencensus.exporter.trace.stackdriver.StackdriverTraceExporter;
+import io.opencensus.exporter.trace.zipkin.ZipkinTraceExporter;
+import io.prometheus.client.exporter.HTTPServer;
 import io.opencensus.trace.Span;
 import io.opencensus.trace.Status;
 import io.opencensus.trace.Tracer;
@@ -38,8 +36,6 @@ import io.opencensus.trace.Tracing;
 import io.opencensus.trace.config.TraceConfig;
 import io.opencensus.trace.config.TraceParams;
 import io.opencensus.trace.samplers.Samplers;
-
-import io.prometheus.client.exporter.HTTPServer;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -49,8 +45,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Observability;
+import io.orijtech.integrations.ocjedis.OcWrapJedis;
+import io.orijtech.integrations.ocjedis.Observability;
 import redis.clients.jedis.params.SetParams;
 
 public class MediasearchClient {
@@ -59,7 +55,7 @@ public class MediasearchClient {
 
     private static final Tracer tracer = Tracing.getTracer();
     private static final String redisHost = envOrAlternative("ITUNESSEARCH_REDIS_SERVER_HOST", "localhost");
-    private static final Jedis jedis = new Jedis(redisHost);
+    private static final OcWrapJedis jedis = new OcWrapJedis(redisHost);
 
     private static final SetParams _3hoursExpiryInSeconds = SetParams.setParams().ex(3 * 60 * 60);
     private static final String utf8 = StandardCharsets.UTF_8.toString();
@@ -127,7 +123,7 @@ public class MediasearchClient {
                 span.setStatus(Status.INTERNAL.withDescription(e.toString()));
             }
 
-            if (serialized != null && serialized != "") {
+            if (true || serialized != null && serialized != "") {
                 // To ensure that items don't go stale forever and
                 // to prune out wasteful storage, let's store them for 3 hours
                 jedis.set(query, serialized, _3hoursExpiryInSeconds);
@@ -158,6 +154,7 @@ public class MediasearchClient {
             System.err.println("Failed to setup OpenCensus exporters: " + e + "\nso proceeding without them");
         }
 
+        while (true) {
         try {
             // Setup OpenCensus exporters
             BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
@@ -177,6 +174,7 @@ public class MediasearchClient {
         } catch (Exception e) {
             System.err.println("Exception encountered: " + e);
         }
+        }
     }
 
     private static void setupOpenCensusAndExporters() throws IOException {
@@ -191,20 +189,8 @@ public class MediasearchClient {
         // Register all the gRPC views and enable stats
         RpcViews.registerAllViews();
 
-        String gcpProjectId = envOrAlternative("ITUNESSEARCH_CLIENT_PROJECTID", "census-demos");
-
-        // Create the Stackdriver stats exporter
-        StackdriverStatsExporter.createAndRegister(
-                StackdriverStatsConfiguration.builder()
-                .setProjectId(gcpProjectId)
-                .setExportInterval(Duration.create(12, 0))
-                .build());
-
-        // Next create the Stackdriver trace exporter
-        StackdriverTraceExporter.createAndRegister(
-                StackdriverTraceConfiguration.builder()
-                .setProjectId(gcpProjectId)
-                .build());
+        // Next create the Zipkin trace exporter
+        ZipkinTraceExporter.createAndRegister("http://localhost:9411/api/v2/spans", "itunes-search-client");
 
         // And then the Prometheus exporter too
         PrometheusStatsCollector.createAndRegister();
